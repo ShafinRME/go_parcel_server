@@ -7,6 +7,11 @@ const admin = require("firebase-admin");
 // Load environment variables from .env file
 dotenv.config();
 
+if (!process.env.DB_USER || !process.env.DB_PASS || !process.env.PAYMENT_GATEWAY_KEY) {
+    console.error('Missing required environment variables');
+    process.exit(1);
+}
+
 const stripe = require('stripe')(process.env.PAYMENT_GATEWAY_KEY);
 
 
@@ -19,9 +24,9 @@ app.use(cors());
 app.use(express.json());
 
 
+const decodedKey = Buffer.from(process.env.FB_SERVICE_KEY, 'base64').toString('utf8');
+const serviceAccount = JSON.parse(decodedKey);
 
-
-const serviceAccount = require("./firebase-admin-key.json");
 
 admin.initializeApp({
     credential: admin.credential.cert(serviceAccount)
@@ -47,6 +52,7 @@ async function run() {
     try {
         // Connect the client to the server	(optional starting in v4.7)
         await client.connect();
+
         const db = client.db('parcelDB'); // database name
         const usersCollection = db.collection('users'); // users collection
         const trackingsCollection = db.collection("trackings");// traking collection
@@ -208,7 +214,7 @@ async function run() {
         });
 
         // GET: Get a specific parcel by ID
-        app.get('/parcels/:id', async (req, res) => {
+        app.get('/parcels/:id', verifyFBToken, async (req, res) => {
             try {
                 const id = req.params.id;
 
@@ -308,7 +314,7 @@ async function run() {
 
 
         // POST: Create a new parcel
-        app.post('/parcels', async (req, res) => {
+        app.post('/parcels', verifyFBToken, async (req, res) => {
             try {
                 const newParcel = req.body;
                 // newParcel.createdAt = new Date();
@@ -320,7 +326,7 @@ async function run() {
             }
         });
 
-        app.patch("/parcels/:id/assign", async (req, res) => {
+        app.patch("/parcels/:id/assign", verifyFBToken, verifyAdmin, async (req, res) => {
             const parcelId = req.params.id;
             const { riderId, riderName, riderEmail } = req.body;
 
@@ -356,7 +362,7 @@ async function run() {
         });
 
 
-        app.patch("/parcels/:id/status", async (req, res) => {
+        app.patch("/parcels/:id/status", verifyFBToken, async (req, res) => {
             const parcelId = req.params.id;
             const { status } = req.body;
             const updatedDoc = {
@@ -383,7 +389,7 @@ async function run() {
             }
         });
 
-        app.patch("/parcels/:id/cashout", async (req, res) => {
+        app.patch("/parcels/:id/cashout", verifyFBToken, verifyAdmin, async (req, res) => {
             const id = req.params.id;
             const result = await parcelsCollection.updateOne(
                 { _id: new ObjectId(id) },
@@ -397,7 +403,7 @@ async function run() {
             res.send(result);
         });
 
-        app.delete('/parcels/:id', async (req, res) => {
+        app.delete('/parcels/:id', verifyFBToken, verifyAdmin, async (req, res) => {
             try {
                 const id = req.params.id;
 
@@ -491,7 +497,7 @@ async function run() {
         });
 
 
-        // Tracking API
+        // ============  TRACKING ENDPOINTS ============
 
         app.get("/trackings/:trackingId", async (req, res) => {
             const trackingId = req.params.trackingId;
@@ -518,6 +524,120 @@ async function run() {
 
 
 
+        // GET: Get tracking updates for a specific parcel by parcel ID
+        app.get("/trackings/parcel/:parcelId", async (req, res) => {
+            const parcelId = req.params.parcelId;
+
+            try {
+                const updates = await trackingsCollection
+                    .find({ parcel_id: parcelId })
+                    .sort({ timestamp: 1 }) // sort by time ascending
+                    .toArray();
+
+                res.json(updates);
+            } catch (error) {
+                console.error("Error fetching tracking updates:", error);
+                res.status(500).json({ message: "Failed to fetch tracking updates" });
+            }
+        });
+
+        // POST: Admin creates a new tracking update
+        app.post("/trackings/admin", verifyFBToken, verifyAdmin, async (req, res) => {
+            try {
+                const { parcel_id, status, location, details, updated_by } = req.body;
+
+                if (!parcel_id || !status || !location) {
+                    return res.status(400).json({
+                        message: "parcel_id, status, and location are required"
+                    });
+                }
+
+                const trackingUpdate = {
+                    parcel_id,
+                    status,
+                    location,
+                    details: details || "",
+                    updated_by: updated_by || req.decoded.email,
+                    timestamp: new Date(),
+                };
+
+                const result = await trackingsCollection.insertOne(trackingUpdate);
+
+                // Also update the parcel's current delivery_status
+                await parcelsCollection.updateOne(
+                    { _id: new ObjectId(parcel_id) },
+                    {
+                        $set: {
+                            delivery_status: status,
+                            last_location: location,
+                            last_updated: new Date()
+                        }
+                    }
+                );
+
+                res.status(201).json({
+                    message: "Tracking update created successfully",
+                    result
+                });
+            } catch (error) {
+                console.error("Error creating tracking update:", error);
+                res.status(500).json({ message: "Failed to create tracking update" });
+            }
+        });
+
+        // PATCH: Admin updates a tracking entry
+        app.patch("/trackings/:trackingId", verifyFBToken, verifyAdmin, async (req, res) => {
+            try {
+                const trackingId = req.params.trackingId;
+                const { status, location, details } = req.body;
+
+                const updateDoc = {
+                    $set: {
+                        ...(status && { status }),
+                        ...(location && { location }),
+                        ...(details !== undefined && { details }),
+                        updated_at: new Date()
+                    }
+                };
+
+                const result = await trackingsCollection.updateOne(
+                    { _id: new ObjectId(trackingId) },
+                    updateDoc
+                );
+
+                if (result.matchedCount === 0) {
+                    return res.status(404).json({ message: "Tracking update not found" });
+                }
+
+                res.json({ message: "Tracking update modified successfully", result });
+            } catch (error) {
+                console.error("Error updating tracking:", error);
+                res.status(500).json({ message: "Failed to update tracking" });
+            }
+        });
+
+        // DELETE: Admin deletes a tracking entry
+        app.delete("/trackings/:trackingId", verifyFBToken, verifyAdmin, async (req, res) => {
+            try {
+                const trackingId = req.params.trackingId;
+
+                const result = await trackingsCollection.deleteOne({
+                    _id: new ObjectId(trackingId)
+                });
+
+                if (result.deletedCount === 0) {
+                    return res.status(404).json({ message: "Tracking update not found" });
+                }
+
+                res.json({ message: "Tracking update deleted successfully" });
+            } catch (error) {
+                console.error("Error deleting tracking:", error);
+                res.status(500).json({ message: "Failed to delete tracking" });
+            }
+        });
+
+
+
         app.get('/payments', verifyFBToken, async (req, res) => {
 
             try {
@@ -538,9 +658,17 @@ async function run() {
             }
         });
         // POST: Record payment and update parcel status
-        app.post('/payments', async (req, res) => {
+        app.post('/payments', verifyFBToken, async (req, res) => {
             try {
                 const { parcelId, email, amount, paymentMethod, transactionId } = req.body;
+                // Validation Part
+                if (!parcelId || !email || !amount || !transactionId) {
+                    return res.status(400).send({ message: 'Missing required fields' });
+                }
+
+                if (amount <= 0) {
+                    return res.status(400).send({ message: 'Invalid amount' });
+                }
 
                 // 1. Update parcel's payment_status
                 const updateResult = await parcelsCollection.updateOne(
@@ -601,8 +729,8 @@ async function run() {
 
 
         // Send a ping to confirm a successful connection
-        await client.db("admin").command({ ping: 1 });
-        console.log("Pinged your deployment. You successfully connected to MongoDB!");
+        // await client.db("admin").command({ ping: 1 });
+        // console.log("Pinged your deployment. You successfully connected to MongoDB!");
     } finally {
         // Ensures that the client will close when you finish/error
         // await client.close();
