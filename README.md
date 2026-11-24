@@ -1,148 +1,47 @@
-# 📦 GO Parcel — Server Side
+# Lumen & Co. — Store API
 
-> **"Delivering trust, one parcel at a time."**
+Express 5 + MongoDB + Firebase Auth + Stripe REST API for the Lumen & Co. storefront and admin dashboard.
 
-This is the backend REST API for **GO Parcel** — a full-stack parcel delivery management system. It handles authentication, parcel management, rider assignment, real-time tracking, and payment processing.
+## Setup
 
-🌐 **Live API:** [Click Here](https://go-parcel-server-six.vercel.app/)
-🔗 **Frontend Repo:** [Visit Here](https://github.com/ShafinRME/go_parcel_client)
-
----
-
-## 🚀 Features
-
-- JWT-based authentication using **Firebase Admin SDK**
-- Role-based access control (User / Rider / Admin)
-- Full parcel CRUD with status tracking
-- Rider assignment and management system
-- Stripe payment integration
-- Real-time parcel tracking endpoints
-- Secure environment variable management
-
----
-
-## 🧰 Tech Stack
-
-### Backend
-| Technology | Link |
-|---|---|
-| Node.js | [nodejs.org](https://nodejs.org) |
-| Express.js v5 | [expressjs.com](https://expressjs.com) |
-
-### Database
-| Technology | Link |
-|---|---|
-| MongoDB Atlas | [mongodb.com](https://www.mongodb.com) |
-
-### Others
-| Technology | Link |
-|---|---|
-| Firebase Admin SDK | [firebase.google.com](https://firebase.google.com) |
-| Stripe API | [stripe.com](https://stripe.com) |
-| Vercel | [vercel.com](https://vercel.com) |
-| dotenv | [npmjs.com/package/dotenv](https://www.npmjs.com/package/dotenv) |
-| CORS | [npmjs.com/package/cors](https://www.npmjs.com/package/cors) |
-| Nodemon | [nodemon.io](https://nodemon.io) |
-
----
-
-## 📡 API Endpoints
-
-### Parcels
-| Method | Endpoint | Access | Description |
-|---|---|---|---|
-| GET | `/parcels/delivery/status-count` | Public | Get parcel count by status |
-| GET | `/parcels` | Auth | Get all or filtered parcels |
-| GET | `/parcels/:id` | Auth | Get single parcel |
-| POST | `/parcels` | Auth | Create new parcel |
-| PATCH | `/parcels/:id/assign` | Admin | Assign rider to parcel |
-| PATCH | `/parcels/:id/status` | Auth | Update delivery status |
-| PATCH | `/parcels/:id/cashout` | Rider | Cashout delivery earning |
-| DELETE | `/parcels/:id` | Admin | Delete a parcel |
-
-### Users
-| Method | Endpoint | Access | Description |
-|---|---|---|---|
-| GET | `/users/search` | Public | Search users by email |
-| GET | `/users/:email/role` | Public | Get user role |
-| POST | `/users` | Public | Create new user |
-| PATCH | `/users/:id/role` | Admin | Update user role |
-
-### Riders
-| Method | Endpoint | Access | Description |
-|---|---|---|---|
-| GET | `/riders/pending` | Admin | Get pending rider applications |
-| GET | `/riders/available` | Public | Get available riders by district |
-| GET | `/riders/active` | Admin | Get active riders |
-| GET | `/rider/parcels` | Rider | Get assigned deliveries |
-| GET | `/rider/completed-parcels` | Rider | Get completed deliveries |
-| POST | `/riders` | Public | Submit rider application |
-| PATCH | `/riders/:id/status` | Admin | Approve or reject rider |
-
-### Trackings
-| Method | Endpoint | Access | Description |
-|---|---|---|---|
-| POST | `/trackings/admin` | Admin | Create tracking update |
-| POST | `/trackings` | Public | Add tracking entry |
-| GET | `/trackings/parcel/:parcelId` | Public | Get tracking by parcel ID |
-| GET | `/trackings/:trackingId` | Public | Get tracking by tracking ID |
-| PATCH | `/trackings/:trackingId` | Admin | Update tracking entry |
-| DELETE | `/trackings/:trackingId` | Admin | Delete tracking entry |
-
-### Payments
-| Method | Endpoint | Access | Description |
-|---|---|---|---|
-| POST | `/create-payment-intent` | Public | Create Stripe payment intent |
-| GET | `/payments` | Auth | Get payment history |
-| POST | `/payments` | Auth | Record new payment |
-
----
-
-## ⚙️ Run Locally
-
-### 1. Clone the repository
-```bash
-git clone https://github.com/ShafinRME/go_parcel_server.git
-cd go_parcel_server
-```
-
-### 2. Install dependencies
 ```bash
 npm install
+cp .env.example .env      # fill in the values
+npm run seed              # demo catalog (only if the DB is empty)
+npm run dev               # http://localhost:5000
 ```
 
-### 3. Set up environment variables
+First admin: put your email in `ADMIN_EMAILS` (comma separated) **or** sign in once on the site and run
+`npm run make-admin -- you@example.com`.
 
-Create a `.env` file in the root directory:
-```env
-DB_USER=your_mongodb_username
-DB_PASS=your_mongodb_password
-PAYMENT_GATEWAY_KEY=your_stripe_secret_key
-FB_SERVICE_KEY=your_base64_encoded_firebase_service_account
-```
+| Script | What it does |
+| --- | --- |
+| `npm run dev` / `npm start` | Start the API |
+| `npm run seed` | Seed categories, products, reviews, banners, coupons (skips if products exist) |
+| `npm run seed:fresh` | Wipe catalog collections and reseed (users and orders are kept) |
+| `npm run make-admin -- <email>` | Promote an existing user to admin |
 
-> **FB_SERVICE_KEY** should be your Firebase service account JSON encoded in Base64.
+## Environment
 
-### 4. Start the development server
-```bash
-npm run dev
-```
+See `.env.example`. Secrets stay on the server: Stripe secret key, Firebase service account, imgbb key.
 
-The server will run at `http://localhost:5000`
+## Security model
 
----
+- Identity always comes from a verified Firebase ID token — the client can never set its own role.
+- Admin routes (`/admin/*`) require `role: admin`; blocked users are rejected everywhere.
+- Prices, discounts, shipping and tax are recalculated on the server from the database for every quote and order.
+- Card orders are only marked paid after the PaymentIntent is retrieved from Stripe and its status, amount, currency and order id match (plus optional signed webhook at `/webhooks/stripe`).
+- Stock is reserved atomically (`$inc` with a `$gte` guard) and returned on cancel/refund.
+- helmet, CORS allow-list, rate limiting, JSON body limits, zod validation on every write, escaped regex search, CSV formula-injection guard, generic 500 messages in production.
 
-## 🔮 Future Improvements
+## Main endpoints
 
-- Add global error handling middleware
-- Add request rate limiting
-- Integrate local Bangladeshi payment gateways (bKash, Nagad)
-- Add OTP-based user verification
-- Implement push notification service
+Public: `GET /settings`, `/banners`, `/categories`, `/testimonials`, `/products`, `/products/facets`, `/products/suggest`, `/products/:slug`, `/products/:id/reviews`, `GET /track`, `POST /subscribe`, `/contact`, `/orders/quote`
 
----
+Customer (Bearer token): `POST /users/sync`, `GET|PATCH /users/me`, addresses CRUD, `GET|PUT /cart`, wishlist, `POST /orders`, `/orders/:id/confirm`, `/orders/:id/pay`, `/orders/:id/cancel`, `GET /orders/mine`, `/orders/:id`, `POST /products/:id/reviews`
 
-## 👨‍💻 Author
+Admin: `/admin/stats`, products (+ bulk), categories, orders (+ CSV export, status/tracking, refund), users (role/block), reviews, coupons, banners, messages, subscribers, settings, image upload.
 
-**Md. Shafin Ahmed**
-- GitHub: [@ShafinRME](https://github.com/ShafinRME)
+## Deploy (Vercel)
+
+`vercel.json` routes everything to `index.js`, which exports the Express app. Set all env vars in the Vercel project, set `NODE_ENV=production`, and add your storefront URL to `CORS_ORIGINS`.
